@@ -1,0 +1,97 @@
+- name: Install Kubernetes
+  hosts: tag_role_k8s_master:tag_role_k8s_member
+  remote_user: ubuntu
+  gather_facts: yes
+  tasks:
+    - name: add Kubernetes apt-key
+      apt_key:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        state: present
+    - apt_repository:
+        repo: deb http://apt.kubernetes.io/ kubernetes-xenial main
+        state: present
+        filename: 'kubernetes'
+
+    - name: install kubelet
+      apt:
+        name: kubelet
+        state: present
+        update_cache: true
+
+    - name: install kubeadm
+      apt:
+        name: kubeadm
+        state: present
+        update_cache: true
+
+- name: install kubectl
+  hosts: tag_role_k8s_master
+  remote_user: ubuntu
+  gather_facts: yes
+  tasks:
+    - apt_repository:
+        repo: deb http://apt.kubernetes.io/ kubernetes-xenial main
+        state: present
+    - package:
+        name: kubectl
+        state: present
+
+
+- hosts: tag_role_k8s_master
+  remote_user: ubuntu
+  gather_facts: yes
+  tasks:
+    - name: initialize the cluster
+      shell: kubeadm init >> cluster_initialized.txt
+      args:
+        chdir: $HOME
+        creates: cluster_initialized.txt
+
+    - name: create .kube directory
+      become: yes
+      become_user: ubuntu
+      file:
+        path: $HOME/.kube
+        state: directory
+        mode: 0755
+
+    - name: copy admin.conf to user's kube config
+      become: yes
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/ubuntu/.kube/config
+        remote_src: yes
+        owner: ubuntu
+
+    - name: install Pod network (weave)
+      become: yes
+      become_user: ubuntu
+      shell: >
+        export KUBECONFIG=$HOME/.kube/config ;
+        export kubever=$(kubectl version | base64 | tr -d '\n') ;
+        curl --location "https://cloud.weave.works/k8s/net?k8s-version=$kubever" >/home/ubuntu/weave.yml ;
+        kubectl apply -f /home/ubuntu/weave.yml
+
+- hosts: tag_role_k8s_master
+  become: yes
+  gather_facts: false
+  tasks:
+    - name: get join command
+      shell: kubeadm token create --print-join-command
+      register: join_command_raw
+     
+
+    - name: set join command
+      set_fact:
+        join_command: "{{ join_command_raw.stdout_lines[0] }}"
+
+- hosts: tag_role_k8s_member
+  become: yes
+  tasks:
+    - name: join cluster
+     # shell: "{{ hostvars['master'].join_command }} >> node_joined.txt"
+     # shell: "{{ hostvars[groups['masters'][0]].join_command }} >> node_joined.txt"
+      shell: "{{ hostvars[groups['tag_role_k8s_master'][0]].join_command }} >> node_joined.txt"
+      args:
+        chdir: $HOME
+        creates: node_joined.txt
